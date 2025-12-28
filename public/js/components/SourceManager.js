@@ -11,6 +11,9 @@ class SourceManager {
 
         // Content browser state
         this.contentType = 'channels'; // 'channels' or 'movies'
+        this.treeData = null; // { type, sourceId, groups: [{ id, name, items: [] }] }
+        this.hiddenSet = new Set(); // Set of hidden item keys
+        this.expandedGroups = new Set(); // Set of expanded group IDs
 
         this.init();
     }
@@ -415,8 +418,15 @@ class SourceManager {
      * Load content tree for a source
      * Checked = Visible, Unchecked = Hidden
      */
+
+
+    /**
+     * Load content tree for a source
+     */
     async loadContentTree(sourceId) {
         this.contentTree.innerHTML = '<p class="hint">Loading...</p>';
+        this.treeData = { type: 'channels', sourceId, groups: [] };
+        this.expandedGroups.clear();
 
         try {
             const source = await API.sources.getById(sourceId);
@@ -430,7 +440,6 @@ class SourceManager {
                 const streams = await API.proxy.xtream.liveStreams(sourceId);
 
                 channels = streams;
-                // Create map of category_id -> category_name
                 categories.forEach(cat => {
                     categoryMap[cat.category_id] = cat.category_name;
                 });
@@ -441,78 +450,45 @@ class SourceManager {
 
             // Get currently hidden items
             const hiddenItems = await API.channels.getHidden(sourceId);
-            const hiddenSet = new Set(hiddenItems.map(h => `${h.item_type}:${h.item_id}`));
+            this.hiddenSet = new Set(hiddenItems.map(h => `${h.item_type}:${h.item_id}`));
 
             // Group channels
             const groups = {};
             channels.forEach(ch => {
                 let groupName = 'Uncategorized';
-
                 if (source.type === 'xtream') {
-                    // Use category map for Xtream
                     if (ch.category_id && categoryMap[ch.category_id]) {
                         groupName = categoryMap[ch.category_id];
                     }
                 } else {
-                    // Use existing fields for M3U
                     groupName = ch.category_name || ch.groupTitle || 'Uncategorized';
                 }
 
                 if (!groups[groupName]) {
                     groups[groupName] = [];
                 }
-                groups[groupName].push(ch);
-            });
 
-            // Render tree - checked = visible, unchecked = hidden
-            let html = '';
-            Object.keys(groups).sort().forEach(groupName => {
-                const groupHidden = hiddenSet.has(`group:${groupName}`);
-                const groupChannels = groups[groupName];
+                // Normalize channel object
+                const channelId = ch.stream_id || ch.id || ch.url;
+                const channelName = ch.name || ch.tvgName || 'Unknown';
 
-                html += `
-                <div class="content-group collapsed" data-group="${groupName}">
-                    <div class="content-group-header">
-                        <span class="group-expander">▼</span>
-                        <label class="checkbox-label" onclick="event.stopPropagation()">
-                            <input type="checkbox" class="group-checkbox" data-type="group" data-id="${groupName}" data-source-id="${sourceId}" ${groupHidden ? '' : 'checked'}>
-                            <span class="group-name">${groupName} (${groupChannels.length})</span>
-                        </label>
-                    </div>
-                    <div class="content-channels">
-                        ${groupChannels.map(ch => {
-                    const channelId = ch.stream_id || ch.id || ch.url;
-                    const channelName = ch.name || ch.tvgName || 'Unknown';
-                    const channelHidden = hiddenSet.has(`channel:${channelId}`);
-                    return `
-                            <label class="checkbox-label channel-item" title="${channelName}">
-                                <input type="checkbox" class="channel-checkbox" data-type="channel" data-id="${channelId}" data-source-id="${sourceId}" ${channelHidden ? '' : 'checked'}>
-                                <span class="channel-name">${channelName}</span>
-                            </label>`;
-                }).join('')}
-                    </div>
-                </div>`;
-            });
-
-            this.contentTree.innerHTML = html || '<p class="hint">No channels found</p>';
-
-            // Toggle group collapse on header click
-            this.contentTree.querySelectorAll('.content-group-header').forEach(header => {
-                header.addEventListener('click', () => {
-                    const group = header.closest('.content-group');
-                    group.classList.toggle('collapsed');
+                groups[groupName].push({
+                    id: channelId,
+                    name: channelName,
+                    original: ch,
+                    type: 'channel'
                 });
             });
 
-            // Attach change listeners for visibility toggling
-            this.contentTree.querySelectorAll('input[type="checkbox"]').forEach(cb => {
-                cb.addEventListener('change', () => this.toggleVisibility(cb));
-            });
+            // Convert to array
+            this.treeData.groups = Object.keys(groups).sort().map(name => ({
+                id: name, // generic group ID
+                name: name,
+                type: 'group',
+                items: groups[name]
+            }));
 
-            // Group checkbox toggles all children (BULK)
-            this.contentTree.querySelectorAll('.group-checkbox').forEach(groupCb => {
-                groupCb.addEventListener('change', () => this.toggleGroupChildren(groupCb));
-            });
+            this.renderTree();
 
         } catch (err) {
             console.error('Error loading content tree:', err);
@@ -521,11 +497,130 @@ class SourceManager {
     }
 
     /**
+     * Render the full tree based on current state
+     */
+    renderTree() {
+        if (!this.treeData || !this.treeData.groups.length) {
+            this.contentTree.innerHTML = '<p class="hint">No content found</p>';
+            return;
+        }
+
+        const html = this.treeData.groups.map(group => this.getGroupHtml(group)).join('');
+        this.contentTree.innerHTML = html;
+
+        // Attach event listeners
+        this.attachTreeListeners(this.contentTree);
+    }
+
+    /**
+     * Get HTML for a group (and its items if expanded)
+     */
+    getGroupHtml(group) {
+        const isHidden = this.hiddenSet.has(`group:${group.name}`); // We use name as ID for groups usually
+        const isExpanded = this.expandedGroups.has(group.id);
+
+        // Calculate partial state if needed, but for now simple checked/unchecked
+        const checked = !isHidden;
+
+        let itemsHtml = '';
+        if (isExpanded) {
+            itemsHtml = `<div class="content-channels">
+                ${group.items.map(item => {
+                const itemHidden = this.hiddenSet.has(`${item.type}:${item.id}`);
+                return `
+                    <label class="checkbox-label channel-item" title="${this.escapeHtml(item.name)}">
+                        <input type="checkbox" class="channel-checkbox" 
+                               data-type="${item.type}" 
+                               data-id="${item.id}" 
+                               data-source-id="${this.treeData.sourceId}" 
+                               ${!itemHidden ? 'checked' : ''}>
+                        <span class="channel-name">${this.escapeHtml(item.name)}</span>
+                    </label>`;
+            }).join('')}
+            </div>`;
+        }
+
+        return `
+            <div class="content-group ${isExpanded ? '' : 'collapsed'}" data-group-id="${this.escapeHtml(group.id)}">
+                <div class="content-group-header">
+                    <span class="group-expander">▼</span>
+                    <label class="checkbox-label" onclick="event.stopPropagation()">
+                        <input type="checkbox" class="group-checkbox" 
+                               data-type="group" 
+                               data-id="${this.escapeHtml(group.name)}" 
+                               data-source-id="${this.treeData.sourceId}" 
+                               ${checked ? 'checked' : ''}>
+                        <span class="group-name">${this.escapeHtml(group.name)} (${group.items.length})</span>
+                    </label>
+                </div>
+                ${itemsHtml}
+            </div>
+        `;
+    }
+
+    escapeHtml(text) {
+        if (!text) return '';
+        return String(text)
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;")
+            .replace(/"/g, "&quot;")
+            .replace(/'/g, "&#039;");
+    }
+
+    attachTreeListeners(container) {
+        // Toggle group collapse
+        container.querySelectorAll('.content-group-header').forEach(header => {
+            header.addEventListener('click', (e) => {
+                // Prevent triggering if clicking the checkbox/label directly (handled by its own listener/bubbling)
+                if (e.target.closest('input') || e.target.closest('label')) return;
+
+                const groupEl = header.closest('.content-group');
+                const groupId = groupEl.dataset.groupId;
+                this.toggleGroupExpand(groupId);
+            });
+        });
+
+        // Toggle visibility
+        container.querySelectorAll('input[type="checkbox"]').forEach(cb => {
+            cb.addEventListener('change', (e) => {
+                if (cb.classList.contains('group-checkbox')) {
+                    this.toggleGroupChildren(cb);
+                } else {
+                    this.toggleVisibility(cb);
+                }
+            });
+        });
+    }
+
+    toggleGroupExpand(groupId) {
+        if (this.expandedGroups.has(groupId)) {
+            this.expandedGroups.delete(groupId);
+        } else {
+            this.expandedGroups.add(groupId);
+        }
+
+        // Re-render only this group
+        const groupEl = this.contentTree.querySelector(`.content-group[data-group-id="${CSS.escape(groupId)}"]`);
+        if (groupEl) {
+            const group = this.treeData.groups.find(g => g.id === groupId);
+            if (group) {
+                const newHtml = this.getGroupHtml(group);
+                groupEl.outerHTML = newHtml;
+
+                // Re-attach listeners to the new element
+                const newEl = this.contentTree.querySelector(`.content-group[data-group-id="${CSS.escape(groupId)}"]`);
+                if (newEl) this.attachTreeListeners(newEl);
+            }
+        }
+    }
+
+    /**
      * Load movie categories tree for a source
-     * Checked = Visible, Unchecked = Hidden
      */
     async loadMovieCategoriesTree(sourceId) {
         this.contentTree.innerHTML = '<p class="hint">Loading movie categories...</p>';
+        this.treeData = { type: 'movies', sourceId, groups: [] };
 
         try {
             const source = await API.sources.getById(sourceId);
@@ -535,7 +630,6 @@ class SourceManager {
                 return;
             }
 
-            // Fetch VOD categories
             const categories = await API.proxy.xtream.vodCategories(sourceId);
 
             if (!categories || categories.length === 0) {
@@ -543,32 +637,33 @@ class SourceManager {
                 return;
             }
 
-            // Get currently hidden items
             const hiddenItems = await API.channels.getHidden(sourceId);
-            const hiddenSet = new Set(hiddenItems.map(h => `${h.item_type}:${h.item_id}`));
+            this.hiddenSet = new Set(hiddenItems.map(h => `${h.item_type}:${h.item_id}`));
 
-            // Render categories - checked = visible, unchecked = hidden
-            let html = '<div class="content-categories">';
-            categories.sort((a, b) => a.category_name.localeCompare(b.category_name)).forEach(cat => {
-                const isHidden = hiddenSet.has(`vod_category:${cat.category_id}`);
-                html += `
-                <label class="checkbox-label category-item">
-                    <input type="checkbox" class="category-checkbox" 
-                           data-type="vod_category" 
-                           data-id="${cat.category_id}" 
-                           data-source-id="${sourceId}" 
-                           ${isHidden ? '' : 'checked'}>
-                    <span class="category-name">${cat.category_name}</span>
-                </label>`;
-            });
-            html += '</div>';
+            // Create a single "Movies" group or flatten?
+            // The original UI rendered a flat list of categories. 
+            // Better to stick to "Group -> Items" structure, or just wrap them in a pseudo-group?
+            // Original: rendered checkboxes directly.
+            // Let's adopt the treeData structure but with a single root group or flat items?
+            // To support generic renderTree, we can put them in a "Categories" group or just render them as items.
+            // Let's update renderTree to support flat list if groups is empty? 
+            // Or just put them in one "All Categories" group that is auto-expanded.
 
-            this.contentTree.innerHTML = html;
+            this.treeData.groups = [{
+                id: 'all_categories',
+                name: 'Categories',
+                type: 'group',
+                items: categories.sort((a, b) => a.category_name.localeCompare(b.category_name)).map(cat => ({
+                    id: cat.category_id,
+                    name: cat.category_name,
+                    type: 'vod_category',
+                    original: cat
+                }))
+            }];
 
-            // Attach change listeners for visibility toggling
-            this.contentTree.querySelectorAll('input[type="checkbox"]').forEach(cb => {
-                cb.addEventListener('change', () => this.toggleVisibility(cb));
-            });
+            // Auto expand
+            this.expandedGroups.add('all_categories');
+            this.renderTree();
 
         } catch (err) {
             console.error('Error loading movie categories:', err);
@@ -578,10 +673,10 @@ class SourceManager {
 
     /**
      * Load series categories tree for a source
-     * Checked = Visible, Unchecked = Hidden
      */
     async loadSeriesCategoriesTree(sourceId) {
         this.contentTree.innerHTML = '<p class="hint">Loading series categories...</p>';
+        this.treeData = { type: 'series', sourceId, groups: [] };
 
         try {
             const source = await API.sources.getById(sourceId);
@@ -591,7 +686,6 @@ class SourceManager {
                 return;
             }
 
-            // Fetch series categories
             const categories = await API.proxy.xtream.seriesCategories(sourceId);
 
             if (!categories || categories.length === 0) {
@@ -599,32 +693,23 @@ class SourceManager {
                 return;
             }
 
-            // Get currently hidden items
             const hiddenItems = await API.channels.getHidden(sourceId);
-            const hiddenSet = new Set(hiddenItems.map(h => `${h.item_type}:${h.item_id}`));
+            this.hiddenSet = new Set(hiddenItems.map(h => `${h.item_type}:${h.item_id}`));
 
-            // Render categories - checked = visible, unchecked = hidden
-            let html = '<div class="content-categories">';
-            categories.sort((a, b) => a.category_name.localeCompare(b.category_name)).forEach(cat => {
-                const isHidden = hiddenSet.has(`series_category:${cat.category_id}`);
-                html += `
-                <label class="checkbox-label category-item">
-                    <input type="checkbox" class="category-checkbox" 
-                           data-type="series_category" 
-                           data-id="${cat.category_id}" 
-                           data-source-id="${sourceId}" 
-                           ${isHidden ? '' : 'checked'}>
-                    <span class="category-name">${cat.category_name}</span>
-                </label>`;
-            });
-            html += '</div>';
+            this.treeData.groups = [{
+                id: 'all_series_categories',
+                name: 'Categories',
+                type: 'group',
+                items: categories.sort((a, b) => a.category_name.localeCompare(b.category_name)).map(cat => ({
+                    id: cat.category_id,
+                    name: cat.category_name,
+                    type: 'series_category',
+                    original: cat
+                }))
+            }];
 
-            this.contentTree.innerHTML = html;
-
-            // Attach change listeners for visibility toggling
-            this.contentTree.querySelectorAll('input[type="checkbox"]').forEach(cb => {
-                cb.addEventListener('change', () => this.toggleVisibility(cb));
-            });
+            this.expandedGroups.add('all_series_categories');
+            this.renderTree();
 
         } catch (err) {
             console.error('Error loading series categories:', err);
@@ -640,34 +725,45 @@ class SourceManager {
         const sourceId = parseInt(checkbox.dataset.sourceId);
         const itemType = checkbox.dataset.type;
         const itemId = checkbox.dataset.id;
-        const isVisible = checkbox.checked;
+        const isVisible = checkbox.checked; // This is the NEW state taken from UI
+
+        // Update local state directly
+        const key = `${itemType}:${itemId}`;
+        if (isVisible) {
+            this.hiddenSet.delete(key);
+        } else {
+            this.hiddenSet.add(key);
+        }
 
         try {
-            // Fire API call (don't await for faster UI response)
+            // Fire API call
             const apiCall = isVisible
                 ? API.channels.show(sourceId, itemType, itemId)
                 : API.channels.hide(sourceId, itemType, itemId);
 
-            // For VOD categories, don't refresh channel list (just let API complete in background)
             if (itemType === 'vod_category' || itemType === 'series_category') {
                 apiCall.catch(err => {
                     console.error(`Error toggling ${itemType} visibility:`, err);
-                    checkbox.checked = !isVisible; // Revert on error
+                    checkbox.checked = !isVisible;
                 });
                 return;
             }
 
-            // For channels/groups, await and refresh
             await apiCall;
+            // No need to "refresh" since we updated state locally and UI is already correct
 
-            // Refresh channel list if visible
+            // Sync Channel List
             if (window.app?.channelList) {
+                // We could just pass the change? But safely reloading hidden is better
                 await window.app.channelList.loadHiddenItems();
                 window.app.channelList.render();
             }
         } catch (err) {
             console.error('Error toggling visibility:', err);
-            // Revert checkbox on error
+            // Revert state and UI
+            if (isVisible) this.hiddenSet.add(key);
+            else this.hiddenSet.delete(key);
+
             checkbox.checked = !isVisible;
         }
     }
@@ -676,22 +772,43 @@ class SourceManager {
      * Toggle all children of a group efficiently
      */
     async toggleGroupChildren(groupCb) {
-        const group = groupCb.closest('.content-group');
-        const channelCheckboxes = group.querySelectorAll('.channel-checkbox');
+        const groupName = groupCb.dataset.id; // Helper uses name as ID
+        const group = this.treeData.groups.find(g => g.name === groupName);
+        if (!group) return;
+
         const isChecked = groupCb.checked;
         const itemsToUpdate = [];
 
-        // Identify items that need changing
-        channelCheckboxes.forEach(chCb => {
-            if (chCb.checked !== isChecked) {
-                chCb.checked = isChecked;
-                itemsToUpdate.push({
-                    sourceId: parseInt(chCb.dataset.sourceId),
-                    itemType: chCb.dataset.type,
-                    itemId: chCb.dataset.id
-                });
+        // 1. Update State
+        if (isChecked) {
+            this.hiddenSet.delete(`group:${group.name}`);
+        } else {
+            this.hiddenSet.add(`group:${group.name}`);
+        }
+
+        group.items.forEach(item => {
+            const key = `${item.type}:${item.id}`;
+            const currentlyHidden = this.hiddenSet.has(key);
+
+            // Only update if state changes
+            if (isChecked && currentlyHidden) {
+                this.hiddenSet.delete(key);
+                itemsToUpdate.push({ sourceId: this.treeData.sourceId, itemType: item.type, itemId: item.id });
+            } else if (!isChecked && !currentlyHidden) {
+                this.hiddenSet.add(key);
+                itemsToUpdate.push({ sourceId: this.treeData.sourceId, itemType: item.type, itemId: item.id });
             }
         });
+
+        // 2. Update UI (re-render group without collapse)
+        // Find group element and update its checkboxes manually OR re-render
+        // Re-rendering is safest and fast for single group
+        const groupEl = this.contentTree.querySelector(`.content-group[data-group-id="${CSS.escape(group.id)}"]`);
+        if (groupEl) {
+            groupEl.outerHTML = this.getGroupHtml(group);
+            const newEl = this.contentTree.querySelector(`.content-group[data-group-id="${CSS.escape(group.id)}"]`);
+            if (newEl) this.attachTreeListeners(newEl);
+        }
 
         if (itemsToUpdate.length === 0) return;
 
@@ -702,50 +819,60 @@ class SourceManager {
                 await API.channels.bulkHide(itemsToUpdate);
             }
 
-            // Refresh channel list
             if (window.app?.channelList) {
                 await window.app.channelList.loadHiddenItems();
                 window.app.channelList.render();
             }
         } catch (err) {
             console.error('Error toggling group children:', err);
-            // We might want to revert UI here, but it's complex for bulk items
+            // Revert? Complex.
         }
     }
 
     /**
-     * Set visibility for all items
+     * Set visibility for all items using Virtual State
      */
     async setAllVisibility(visible) {
-        const sourceId = this.contentSourceSelect?.value;
-        if (!sourceId) return;
+        if (!this.treeData || !this.treeData.groups) return;
 
-        const checkboxes = this.contentTree.querySelectorAll('input[type="checkbox"]');
+        // 1. Update State
         const items = [];
 
-        checkboxes.forEach(cb => {
-            if (cb.checked !== visible) {
-                items.push({
-                    sourceId: parseInt(cb.dataset.sourceId),
-                    itemType: cb.dataset.type,
-                    itemId: cb.dataset.id
-                });
-                cb.checked = visible;
+        this.treeData.groups.forEach(group => {
+            // Group visibility (if it's a channel group)
+            if (group.type === 'group') {
+                const groupKey = `group:${group.name}`;
+                if (visible) this.hiddenSet.delete(groupKey);
+                else this.hiddenSet.add(groupKey);
             }
+
+            // Items visibility
+            group.items.forEach(item => {
+                const key = `${item.type}:${item.id}`;
+                const isHidden = this.hiddenSet.has(key);
+
+                if (visible && isHidden) {
+                    this.hiddenSet.delete(key);
+                    items.push({ sourceId: this.treeData.sourceId, itemType: item.type, itemId: item.id });
+                } else if (!visible && !isHidden) {
+                    this.hiddenSet.add(key);
+                    items.push({ sourceId: this.treeData.sourceId, itemType: item.type, itemId: item.id });
+                }
+            });
         });
+
+        // 2. Re-render View (Fast because we only render headers + expanded groups)
+        this.renderTree();
 
         if (items.length === 0) return;
 
         try {
             if (visible) {
-                // Show all - use bulk API
                 await API.channels.bulkShow(items);
             } else {
-                // Hide all - use bulk API
                 await API.channels.bulkHide(items);
             }
 
-            // Refresh channel list
             if (window.app?.channelList) {
                 await window.app.channelList.loadHiddenItems();
                 window.app.channelList.render();

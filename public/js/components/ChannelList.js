@@ -133,13 +133,31 @@ class ChannelList {
     // ... (loadSources, loadChannels, loadAllChannels, loadXtreamChannels, loadM3uChannels, loadHiddenItems, isHidden, loadFavorites, isFavorite, toggleFavorite methods remain same)
 
     /**
-     * Get current program info string
+     * Get current program info string - cached for performance
      */
     getProgramInfo(channel) {
         try {
             if (!window.app || !window.app.epgGuide) return null;
+
+            // Cache key: channel_id + current_minute (invalidate every minute)
+            const currentMinute = Math.floor(Date.now() / 60000);
+            const cacheKey = `${channel.tvgId || channel.name}:${currentMinute}`;
+
+            if (this._programInfoCache && this._programInfoCache.has(cacheKey)) {
+                return this._programInfoCache.get(cacheKey);
+            }
+
+            // Clear old cache entries if minute changed
+            if (!this._lastCacheMinute || this._lastCacheMinute !== currentMinute) {
+                this._programInfoCache = new Map();
+                this._lastCacheMinute = currentMinute;
+            }
+
             const program = window.app.epgGuide.getCurrentProgram(channel.tvgId, channel.name);
-            return program ? program.title : null;
+            const result = program ? program.title : null;
+
+            this._programInfoCache.set(cacheKey, result);
+            return result;
         } catch (e) {
             console.warn("Error in getProgramInfo", e);
             return null;
@@ -231,9 +249,9 @@ class ChannelList {
         this.loader.style.opacity = '0'; // Hide initially
         this.container.appendChild(this.loader);
 
-        // Render initial batches - load enough to create scrollable content
-        // With many hidden groups, we may need multiple batches to get enough visible groups
-        const maxInitialBatches = 10; // Load up to 200 groups (10 batches x 20 groups)
+        // Render initial batches - load just enough to fill visible area + buffer
+        // Reduced from 10 to 2 to significantly speed up initial load time for large lists
+        const maxInitialBatches = 2;
         for (let i = 0; i < maxInitialBatches; i++) {
             if (this.currentBatch * this.batchSize >= this.sortedGroups.length) break;
             this.renderNextBatch();
