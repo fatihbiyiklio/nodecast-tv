@@ -79,6 +79,32 @@ You can run NodeCast TV easily using Docker.
 
 The application will be available at `http://localhost:3000`.
 
+## Browser Codec Support
+
+NodeCast TV is a web-based application, which means **video decoding is handled by your browser**, not by the server. The server simply proxies the stream data - it does not transcode or re-encode video.
+
+This means codec support depends entirely on what your browser can decode natively:
+
+| Codec | Chrome | Firefox | Safari | Edge |
+|-------|--------|---------|--------|------|
+| **H.264 (AVC)** | ✅ | ✅ | ✅ | ✅ |
+| **H.265 (HEVC)** | ❌¹ | ❌ | ✅ | ⚠️² |
+| **VP9** | ✅ | ✅ | ⚠️³ | ✅ |
+| **AV1** | ✅ | ✅ | ❌ | ✅ |
+| **AAC Audio** | ✅ | ✅ | ✅ | ✅ |
+| **AC3/EAC3 (Dolby)** | ❌ | ❌ | ✅ | ❌ |
+| **MP3 Audio** | ✅ | ✅ | ✅ | ✅ |
+
+**Notes:**
+1. Chrome may support HEVC on macOS with hardware decoder
+2. Edge requires the paid "HEVC Video Extensions" from Microsoft Store ($0.99)
+3. Safari VP9 support varies by device/version
+
+**If a stream doesn't play:**
+- The stream codec may not be supported by your browser
+- Try a different browser (Safari for HEVC/Dolby, Chrome/Edge for VP9/AV1)
+- Check if your IPTV provider offers alternative stream formats
+
 ## Technology Stack
 
 - **Backend**: Node.js, Express
