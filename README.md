@@ -139,15 +139,17 @@ nodecast-tv/
 
 ## License
 
-This project is licensed under the **Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International (CC BY-NC-SA 4.0)** license.
+This project is licensed under the **GNU General Public License v3.0 (GPL-3.0)**.
 
 You are free to:
--   **Share** — copy and redistribute the material in any medium or format
--   **Adapt** — remix, transform, and build upon the material
+-   **Run** the program for any purpose
+-   **Study** how the program works and change it
+-   **Redistribute** copies
+-   **Distribute** copies of your modified versions
 
-Under the following terms:
--   **Attribution** — You must give appropriate credit.
--   **NonCommercial** — You may not use the material for commercial purposes.
--   **ShareAlike** — If you remix, transform, or build upon the material, you must distribute your contributions under the same license as the original.
+Under the condition that:
+-   You typically must distinguish your modifications from the original work
+-   You provide the source code to recipients
+-   You license any derivative works under the same GPL-3.0 license
 
 See the [LICENSE](LICENSE) file for details.
