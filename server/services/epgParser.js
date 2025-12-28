@@ -5,8 +5,10 @@
 
 const { parseString } = require('xml2js');
 const { promisify } = require('util');
+const zlib = require('zlib');
 
 const parseXml = promisify(parseString);
+const gunzip = promisify(zlib.gunzip);
 
 /**
  * Parse XMLTV date format (YYYYMMDDHHmmss +ZZZZ)
@@ -164,7 +166,24 @@ async function fetchAndParse(url) {
     if (!response.ok) {
         throw new Error(`Failed to fetch EPG: ${response.status} ${response.statusText}`);
     }
-    const content = await response.text();
+
+    let content;
+    const contentEncoding = response.headers.get('content-encoding');
+    const isGzipped = url.endsWith('.gz') || contentEncoding === 'gzip';
+
+    if (isGzipped) {
+        // Handle gzipped EPG files (.xml.gz)
+        const buffer = await response.arrayBuffer();
+        try {
+            const decompressed = await gunzip(Buffer.from(buffer));
+            content = decompressed.toString('utf-8');
+        } catch (err) {
+            throw new Error(`Failed to decompress gzipped EPG: ${err.message}`);
+        }
+    } else {
+        content = await response.text();
+    }
+
     return parse(content);
 }
 
