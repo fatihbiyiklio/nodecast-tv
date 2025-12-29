@@ -752,6 +752,7 @@ class SourceManager {
             await apiCall;
             // No need to "refresh" since we updated state locally and UI is already correct
 
+
             // Sync Channel List
             if (window.app?.channelList) {
                 // We could just pass the change? But safely reloading hidden is better
@@ -779,12 +780,18 @@ class SourceManager {
         const isChecked = groupCb.checked;
         const itemsToUpdate = [];
 
-        // 1. Update State
+        // 1. Update State for GROUP itself
         if (isChecked) {
             this.hiddenSet.delete(`group:${group.name}`);
         } else {
             this.hiddenSet.add(`group:${group.name}`);
         }
+
+        // Fire API for the group visibility change
+        const groupApiCall = isChecked
+            ? API.channels.show(this.treeData.sourceId, 'group', group.name)
+            : API.channels.hide(this.treeData.sourceId, 'group', group.name);
+        groupApiCall.catch(err => console.error('Error updating group visibility:', err));
 
         group.items.forEach(item => {
             const key = `${item.type}:${item.id}`;
@@ -842,8 +849,16 @@ class SourceManager {
             // Group visibility (if it's a channel group)
             if (group.type === 'group') {
                 const groupKey = `group:${group.name}`;
-                if (visible) this.hiddenSet.delete(groupKey);
-                else this.hiddenSet.add(groupKey);
+                const isGroupHidden = this.hiddenSet.has(groupKey);
+
+                // Only update if state changes
+                if (visible && isGroupHidden) {
+                    this.hiddenSet.delete(groupKey);
+                    items.push({ sourceId: this.treeData.sourceId, itemType: 'group', itemId: group.name });
+                } else if (!visible && !isGroupHidden) {
+                    this.hiddenSet.add(groupKey);
+                    items.push({ sourceId: this.treeData.sourceId, itemType: 'group', itemId: group.name });
+                }
             }
 
             // Items visibility
