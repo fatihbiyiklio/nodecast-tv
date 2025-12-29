@@ -464,20 +464,18 @@ class VideoPlayer {
                 this.video.muted = !this.video.muted;
                 break;
             case 'ArrowUp':
-                e.preventDefault();
-                if (this.settings.arrowKeysChangeChannel) {
-                    this.channelUp();
-                } else {
+                if (!this.settings.arrowKeysChangeChannel) {
+                    e.preventDefault();
                     this.video.volume = Math.min(1, this.video.volume + 0.1);
                 }
+                // If arrowKeysChangeChannel is true, let HomePage handle it
                 break;
             case 'ArrowDown':
-                e.preventDefault();
-                if (this.settings.arrowKeysChangeChannel) {
-                    this.channelDown();
-                } else {
+                if (!this.settings.arrowKeysChangeChannel) {
+                    e.preventDefault();
                     this.video.volume = Math.max(0, this.video.volume - 0.1);
                 }
+                // If arrowKeysChangeChannel is true, let HomePage handle it
                 break;
             case 'ArrowLeft':
                 e.preventDefault();

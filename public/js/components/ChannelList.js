@@ -274,7 +274,11 @@ class ChannelList {
             visibleChannels.forEach(ch => {
                 // We clone the object for the rendered list to attach the unique ID
                 // ensuring no side effects on the main channel object
-                const renderedCh = { ...ch, _renderId: `rid_${Date.now()}_${Math.random().toString(36).substr(2, 9)}` };
+                const renderedCh = {
+                    ...ch,
+                    _renderId: `rid_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+                    _renderGroup: groupName // Track visual group for navigation
+                };
                 this.renderedChannels.push(renderedCh);
             });
         });
@@ -633,7 +637,10 @@ class ChannelList {
         const channelList = data.channels.map(ch => ({
             ...ch,
             // Use the stable id provided by the server (from tvgId or hash)
-            id: ch.id,
+            // Prefix with sourceId to ensure global uniqueness across multiple M3U sources
+            id: `m3u_${sourceId}_${ch.id}`,
+            // Keep original ID as streamId if needed (or just use original ID for reference)
+            streamId: ch.id,
             groupId: `m3u_${sourceId}_group_${data.groups.findIndex(g => g.name === ch.groupTitle)}`,
             sourceId,
             sourceType: 'm3u'
@@ -879,15 +886,26 @@ class ChannelList {
 
         // Try to find specific render instance first
         let activeItem;
-        if (this.currentRenderId) {
-            activeItem = this.container.querySelector(`[data-render-id="${this.currentRenderId}"]`);
+        activeItem = this.container.querySelector(`[data-render-id="${this.currentRenderId}"]`);
+
+        // If not found in DOM, it might be in a future batch not yet rendered
+        // Render batches until we find it or run out
+        if (!activeItem && this.renderedChannels.length > 0) {
+            let safety = 0;
+            while (!activeItem && this.currentBatch * this.batchSize < this.sortedGroups.length && safety < 20) {
+                this.renderNextBatch();
+                if (this.currentRenderId) {
+                    activeItem = this.container.querySelector(`[data-render-id="${this.currentRenderId}"]`);
+                }
+                safety++;
+            }
         }
 
-        // Fallback to ID match if render ID not found (e.g. initial load or not rendered yet)
+        // Fallback checks if still not found
         if (!activeItem) {
             activeItem = this.container.querySelector(`[data-channel-id="${channel.id}"]`);
-            // If we fell back, update currentRenderId to match what we found
-            if (activeItem) {
+            // If we fell back to channel ID, update currentRenderId to match what we found
+            if (activeItem && activeItem.dataset.renderId) {
                 this.currentRenderId = activeItem.dataset.renderId;
             }
         }
@@ -896,8 +914,42 @@ class ChannelList {
             activeItem.classList.add('active');
             activeItem.classList.add('nav-active'); // Add specific class for navigation tracking
 
-            // Ensure visible (scroll into view if needed)
-            activeItem.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+            // Handle Group Expansion & Scrolling (Focus Mode)
+            const groupHeader = activeItem.closest('.channel-group')?.querySelector('.group-header');
+            if (groupHeader) {
+                const groupName = groupHeader.dataset.group;
+
+                // 1. Expand current group if needed
+                if (this.collapsedGroups.has(groupName)) {
+                    this.collapsedGroups.delete(groupName);
+                    // Update DOM directly for immediate feedback
+                    groupHeader.classList.remove('collapsed');
+                    this.saveCollapsedState();
+                }
+
+                // 2. Collapse ALL other groups (Focus Mode)
+                document.querySelectorAll('.group-header').forEach(header => {
+                    if (header !== groupHeader && !header.classList.contains('collapsed')) {
+                        const otherGroup = header.dataset.group;
+                        this.collapsedGroups.add(otherGroup);
+                        header.classList.add('collapsed');
+                    }
+                });
+                this.saveCollapsedState();
+
+                // 3. Scroll Group to Top
+                // Use a small timeout to allow layout updates (e.g. collapse animations) to start
+                setTimeout(() => {
+                    groupHeader.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                    // Ensure active item is visible within the group
+                    setTimeout(() => {
+                        activeItem.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+                    }, 50);
+                }, 50);
+            } else {
+                // Fallback for non-grouped items or flat list
+                activeItem.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+            }
         }
 
         // Get stream URL
