@@ -92,7 +92,7 @@ router.get('/xtream/:sourceId/:action', async (req, res) => {
         res.json(data);
     } catch (err) {
         console.error('Xtream proxy error:', err);
-        res.status(500).json({ error: err.message });
+        res.status(err.status || 500).json({ error: err.message });
     }
 });
 
