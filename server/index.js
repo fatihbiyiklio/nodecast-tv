@@ -67,6 +67,12 @@ app.use((err, req, res, next) => {
     res.status(500).json({ error: 'Internal server error' });
 });
 
-app.listen(PORT, () => {
-    console.log(`NodeCast TV server running on http://localhost:${PORT}`);
-});
+// Export for Vercel
+module.exports = app;
+
+// Only listen if run directly (not imported as a module)
+if (require.main === module) {
+    app.listen(PORT, () => {
+        console.log(`NodeCast TV server running on http://localhost:${PORT}`);
+    });
+}

@@ -3,7 +3,16 @@ const path = require('path');
 const { existsSync, mkdirSync } = require('fs');
 
 // Ensure data directory exists (sync is fine for startup)
-const dataDir = path.join(__dirname, '..', 'data');
+// Ensure data directory exists (sync is fine for startup)
+const isVercel = process.env.VERCEL === '1';
+let dataDir;
+
+if (isVercel) {
+  dataDir = path.join('/tmp', 'data');
+} else {
+  dataDir = path.join(__dirname, '..', 'data');
+}
+
 if (!existsSync(dataDir)) {
   mkdirSync(dataDir, { recursive: true });
 }
